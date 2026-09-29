@@ -4,7 +4,7 @@ A note-sharing app with **secure, expiring share links**: one-time or time-based
 
 | | |
 | --- | --- |
-| **Live demo** | `https://<your-deployment>.vercel.app` |
+| **Live demo** | https://note-taking-app-tau-smoky.vercel.app |
 | **Test account** | `demo@cachet.app` / *(sent with the submission)* |
 | **Stack** | Next.js 16 · TypeScript · Hono · PostgreSQL · Drizzle ORM · Tailwind CSS 4 · shadcn/ui |
 
