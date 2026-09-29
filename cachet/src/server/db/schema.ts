@@ -1,7 +1,9 @@
 import { sql } from "drizzle-orm";
 import {
   bigserial,
+  boolean,
   check,
+  customType,
   index,
   integer,
   jsonb,
@@ -13,6 +15,10 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import type { Preferences } from "../../lib/preferences";
+
+/** Raw binary column (Postgres bytea) — used for the small profile photo. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
@@ -20,12 +26,8 @@ const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull(
 export const shareTypeEnum = pgEnum("share_type", ["one_time", "time_based"]);
 export const accessTypeEnum = pgEnum("access_type", ["public", "password"]);
 
-export type UserPreferences = {
-  defaultShareType?: "one_time" | "time_based";
-  defaultAccessType?: "public" | "password";
-  defaultExpiry?: "1h" | "24h" | "7d" | "30d";
-  aiEnabled?: boolean;
-};
+/** Stored partially; always read through resolvePreferences() which fills defaults. */
+export type UserPreferences = Partial<Preferences>;
 
 export const users = pgTable(
   "users",
@@ -35,6 +37,18 @@ export const users = pgTable(
     name: varchar("name", { length: 80 }).notNull(),
     passwordHash: text("password_hash").notNull(),
     preferences: jsonb("preferences").$type<UserPreferences>().notNull().default({}),
+    bio: varchar("bio", { length: 160 }),
+    avatarColor: varchar("avatar_color", { length: 16 }),
+    // Profile photo: re-sized in the browser (≤256×256), type-checked by magic bytes on upload.
+    avatarImage: bytea("avatar_image"),
+    avatarMime: varchar("avatar_mime", { length: 16 }),
+    avatarUpdatedAt: timestamp("avatar_updated_at", { withTimezone: true }),
+    termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
+    // Two-factor auth: the TOTP secret is AES-256-GCM encrypted (it must be readable to verify codes).
+    totpSecret: text("totp_secret"),
+    totpEnabledAt: timestamp("totp_enabled_at", { withTimezone: true }),
+    // SHA-256 hashes of unused one-time backup codes.
+    backupCodes: jsonb("backup_codes").$type<string[]>().notNull().default([]),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -70,13 +84,34 @@ export const notes = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     title: varchar("title", { length: 200 }).notNull(),
     content: text("content").notNull(),
+    pinned: boolean("pinned").notNull().default(false),
+    color: varchar("color", { length: 16 }),
+    tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }), // in trash
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     index("notes_owner_updated_idx").on(t.ownerId, t.updatedAt.desc()),
     check("notes_content_length", sql`char_length(${t.content}) <= 50000`),
+    check("notes_tags_count", sql`cardinality(${t.tags}) <= 10`),
   ],
+);
+
+/** Snapshots of earlier note versions (restorable from the history panel). */
+export const noteVersions = pgTable(
+  "note_versions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    noteId: uuid("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 200 }).notNull(),
+    content: text("content").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("note_versions_note_created_idx").on(t.noteId, t.createdAt.desc())],
 );
 
 /**
@@ -139,6 +174,50 @@ export const shareViews = pgTable(
   (t) => [index("share_views_link_viewed_idx").on(t.linkId, t.viewedAt.desc())],
 );
 
+/** In-app notifications (bell icon). */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: varchar("type", { length: 32 }).notNull(),
+    title: varchar("title", { length: 160 }).notNull(),
+    body: varchar("body", { length: 400 }),
+    href: varchar("href", { length: 300 }),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("notifications_user_created_idx").on(t.userId, t.createdAt.desc())],
+);
+
+/** Account security log: sign-ins, failed attempts, password and 2FA changes. */
+export const securityEvents = pgTable(
+  "security_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: varchar("type", { length: 40 }).notNull(),
+    ipHash: varchar("ip_hash", { length: 64 }),
+    userAgent: varchar("user_agent", { length: 256 }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("security_events_user_created_idx").on(t.userId, t.createdAt.desc())],
+);
+
+/** Feedback sent from the Help page. */
+export const feedback = pgTable("feedback", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+  kind: varchar("kind", { length: 16 }).notNull(),
+  message: text("message").notNull(),
+  page: varchar("page", { length: 200 }),
+  createdAt: createdAt(),
+});
+
 /** Fixed-window rate limit counters, shared by every server instance. */
 export const rateLimits = pgTable("rate_limits", {
   key: varchar("key", { length: 200 }).primaryKey(),
@@ -148,4 +227,5 @@ export const rateLimits = pgTable("rate_limits", {
 
 export type User = typeof users.$inferSelect;
 export type Note = typeof notes.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;
 export type ShareLink = typeof shareLinks.$inferSelect;

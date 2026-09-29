@@ -2,10 +2,12 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Instrument_Serif } from "next/font/google";
 import { headers } from "next/headers";
 import { Providers } from "@/components/providers";
+import { resolvePreferences } from "@/lib/preferences";
+import { getCurrentUser } from "@/server/auth/current-user";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
-const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"], preload: false });
 const instrumentSerif = Instrument_Serif({
   variable: "--font-instrument-serif",
   subsets: ["latin"],
@@ -40,11 +42,17 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   // Per-request CSP nonce set by src/proxy.ts; needed for next-themes' inline script.
   const nonce = (await headers()).get("x-nonce") ?? undefined;
+  // Appearance settings are applied on the server, so there is no flash of the default style.
+  const user = await getCurrentUser();
+  const prefs = resolvePreferences(user?.preferences);
 
   return (
     <html
       lang="en"
       suppressHydrationWarning
+      data-accent={prefs.accent}
+      data-font={prefs.fontScale}
+      data-motion={prefs.reduceMotion ? "reduce" : "full"}
       className={`${geistSans.variable} ${geistMono.variable} ${instrumentSerif.variable} h-full antialiased`}
     >
       <body className="relative flex min-h-full flex-col">

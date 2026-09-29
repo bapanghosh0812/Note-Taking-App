@@ -5,8 +5,10 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   APP_URL: z.string().url().optional(),
   APP_SECRET: z.string().min(32, "APP_SECRET must be at least 32 characters"),
-  ANTHROPIC_API_KEY: z.string().optional(),
-  AI_MODEL: z.string().default("claude-opus-5-5"),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default("gemini-3.8-flash"),
+  // Protects the scheduled cleanup endpoint (Vercel Cron sends it as a Bearer token).
+  CRON_SECRET: z.string().min(16).optional(),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 

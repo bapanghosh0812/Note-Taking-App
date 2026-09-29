@@ -34,9 +34,11 @@ export async function createSession(userId: string, meta: { userAgent: string | 
 
 /**
  * Resolves a cookie token to a user. Returns the new expiry when the session
- * was slid forward so the caller can refresh the cookie.
+ * was slid forward so the caller can refresh the cookie. Callers that cannot
+ * set cookies pass `renew: false`, so the database and the browser cookie
+ * never disagree about when the session ends.
  */
-export async function validateSession(token: string | undefined) {
+export async function validateSession(token: string | undefined, { renew = true }: { renew?: boolean } = {}) {
   if (!token || token.length !== 43) return null;
   const db = getDb();
   const sessionId = sha256(token);
@@ -61,7 +63,7 @@ export async function validateSession(token: string | undefined) {
   if (!row) return null;
 
   let renewedExpiresAt: Date | null = null;
-  if (row.expiresAt.getTime() - Date.now() < RENEW_THRESHOLD_MS) {
+  if (renew && row.expiresAt.getTime() - Date.now() < RENEW_THRESHOLD_MS) {
     renewedExpiresAt = new Date(Date.now() + SESSION_TTL_MS);
     await db
       .update(sessions)

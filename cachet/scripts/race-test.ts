@@ -62,7 +62,7 @@ async function main() {
 
   const email = `race-${randomBytes(4).toString("hex")}@example.test`;
   const password = `Race-${randomBytes(9).toString("base64url")}1`;
-  const reg = await api("/auth/register", { method: "POST", json: { name: "Race Tester", email, password } });
+  const reg = await api("/auth/register", { method: "POST", json: { name: "Race Tester", email, password, acceptTerms: true } });
   if (reg.status !== 201) throw new Error(`Register failed: ${JSON.stringify(reg.body)}`);
 
   // 1. One-time public link: exactly one request may win.

@@ -27,8 +27,9 @@ A note-sharing app with **secure, expiring share links**: one-time or time-based
 13. [Questions from the brief](#questions-from-the-brief)
 14. [API reference](#api-reference)
 15. [Testing](#testing)
-16. [Deployment](#deployment)
-17. [Project structure](#project-structure)
+16. [Performance](#performance)
+17. [Deployment](#deployment)
+18. [Project structure](#project-structure)
 
 ---
 
@@ -44,13 +45,14 @@ A note-sharing app with **secure, expiring share links**: one-time or time-based
 
 **Extras**
 
-- Several independent links per note (e.g. one public, one key-protected) and "revoke all"
-- Issue a new key for a link (old key dies instantly, lockout cleared)
-- Per-link activity log (time, public/unlocked, device) and live-updating counters
-- Security advisor: flags passwords, API keys, card numbers (Luhn), Aadhaar/PAN etc. in a note and recommends a safer link — runs locally in the browser
-- AI writing assistant (Claude): improve, fix grammar, shorten, expand, summarize, bullet points, suggest title — streamed, rate-limited, optional
-- Markdown notes with safe rendering, QR code for links, command palette (`Ctrl K`), light/dark themes
-- Settings: profile, default link settings, AI toggle, change password, signed-in devices, JSON export, delete account
+- **Links:** several independent links per note, "revoke all", extend expiry, issue a new key (old key dies instantly, lockout cleared), QR code, per-link activity log, live-updating counters, a "Share links" page across all notes
+- **Security advisor:** flags passwords, API keys, card numbers (Luhn), Aadhaar/PAN etc. in a note and recommends a safer link — runs locally in the browser
+- **AI (Google Gemini, optional):** improve, fix grammar, shorten, expand, summarize, bullet points, action items, explain, translate, change tone, suggest title, auto-tags, "Write with AI" from a prompt, *smart share* (judges sensitivity and pre-fills safe link settings), and an in-app assistant that knows the note you are looking at and how Cachet works — streamed, rate-limited, can be switched off
+- **Notes:** Markdown editor with toolbar, split preview, templates, tags, colors, pin, archive, trash (restore within 30 days), version history with restore, duplicate, import `.md`/`.txt`, export Markdown, print / save as PDF
+- **Account security:** two-factor authentication (TOTP authenticator app + one-time backup codes), device list with remote sign-out, security log, password change signs out other devices
+- **Workspace:** dashboard (stats, 14-day views chart, expiring links, onboarding checklist), notifications (link opened, link locked, security events), command palette (`Ctrl K`), keyboard shortcuts, profile with photo upload
+- **Settings:** appearance (theme, accent color, text size, reduced motion), editor, sharing defaults, notifications, AI preferences, JSON data export, account deletion
+- **Public pages:** landing page, help center with FAQ, Terms, Privacy and Security pages
 
 ---
 
@@ -59,13 +61,13 @@ A note-sharing app with **secure, expiring share links**: one-time or time-based
 | Layer | Choice | Why |
 | --- | --- | --- |
 | Frontend | Next.js 16 (App Router), React 19, TypeScript | Required stack; server layouts guard private pages |
-| UI | Tailwind CSS 4, shadcn/ui (Radix), motion | Accessible primitives, consistent design tokens |
+| UI | Tailwind CSS 4, shadcn/ui (Radix), CSS animations | Accessible primitives, consistent design tokens, no animation library in the bundle |
 | API | Hono, mounted at `/api/*` via a Next.js catch-all route | Small, typed router; `hc<AppType>` gives an end-to-end typed client |
-| Validation | zod (shared by browser and server) | One schema, two uses — the server is still the source of truth |
+| Validation | zod on the server, lightweight mirrored checks in the browser | The server is the source of truth; zod stays out of the browser bundle |
 | Database | PostgreSQL + Drizzle ORM (postgres.js driver) | Row-level locking and atomic conditional updates are what make one-time links safe |
 | Auth | Custom server-side sessions (opaque token cookie, hashed in DB) | Revocable, no JWT invalidation problem, easy to reason about |
 | Hashing | Node `crypto.scrypt` (memory-hard), SHA-256, HMAC | No native dependencies, OWASP-listed KDF |
-| AI | Anthropic Claude via `@anthropic-ai/sdk` | Optional — the app works fully without an API key |
+| AI | Google Gemini via `@google/genai` (structured JSON output for tags / smart share) | Optional — the app works fully without an API key |
 | Tests | Vitest (unit) + `scripts/race-test.ts` (concurrency, against a real server) | |
 
 ---
@@ -87,9 +89,12 @@ Fill in `.env.local`:
 | `DATABASE_URL` | ✅ | Postgres connection string |
 | `APP_SECRET` | ✅ | ≥ 32 random chars — `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` |
 | `APP_URL` | recommended | Public origin, used to build share links (e.g. `http://localhost:3000`) |
-| `ANTHROPIC_API_KEY` | optional | Enables the AI assistant |
-| `AI_MODEL` | optional | Defaults to `claude-opus-5-5` |
+| `GEMINI_API_KEY` | optional | Enables the AI features ([get a key](https://aistudio.google.com/apikey)) |
+| `GEMINI_MODEL` | optional | Defaults to `gemini-3.8-flash` |
+| `CRON_SECRET` | optional | ≥ 16 chars; protects the daily cleanup job (`/api/cron/cleanup`, called by Vercel Cron) |
 | `DEMO_EMAIL`, `DEMO_PASSWORD` | optional | Used by `npm run db:seed` |
+
+> **Tip (Windows):** a variable set in the system environment overrides `.env.local`. If the AI says the key was rejected although `.env.local` is correct, remove the old system variable (PowerShell: `[Environment]::SetEnvironmentVariable("GEMINI_API_KEY", $null, "User")`) and restart the terminal.
 
 **No Postgres installed?** Pick one:
 
@@ -154,7 +159,7 @@ erDiagram
                 varchar ip_hash "HMAC, never raw IP" }
 ```
 
-Plus `rate_limits(key PK, count, reset_at)` — a fixed-window counter table shared by all server instances.
+Plus `rate_limits(key PK, count, reset_at)` — a fixed-window counter table shared by all server instances — and, from `drizzle/0001_features.sql` / `0002_avatar.sql`: `notifications`, `note_versions`, `security_events`, `feedback`, note columns `pinned / color / tags / archived_at / deleted_at`, and user columns for bio, 2FA (`totp_secret` AES-256-GCM encrypted, hashed `backup_codes`) and the profile photo (`avatar_image` bytea ≤ 100 KB, type checked by magic bytes).
 
 **Integrity enforced by the database itself** (`drizzle/0000_init.sql`):
 
@@ -377,23 +382,37 @@ All endpoints are under `/api`, JSON in/out, errors as `{ "error": { "code", "me
 | POST | `/auth/register` | – | Create account + session |
 | POST | `/auth/login` | – | Sign in |
 | POST | `/auth/logout` | – | End session |
+| POST | `/auth/login/2fa` | – | Second step when two-factor authentication is on |
 | GET | `/auth/me` | ✅ | Current user |
-| GET | `/notes?q=` | ✅ | List/search notes with link stats |
-| POST | `/notes` | ✅ | Create note + first share link (returns URL + key once) |
-| GET/PATCH/DELETE | `/notes/:id` | ✅ | Read / edit / delete a note |
+| GET | `/notes?q=&view=&tag=&sort=` | ✅ | List/search notes (all, pinned, shared, archived, trash) with link stats |
+| GET | `/notes/tags` | ✅ | Tags with counts |
+| POST | `/notes` | ✅ | Create note (+ optional first share link, URL + key returned once) |
+| GET/PATCH/DELETE | `/notes/:id` | ✅ | Read / edit / move to trash |
+| POST | `/notes/:id/restore`, `/notes/:id/duplicate` | ✅ | Restore from trash / duplicate |
+| DELETE / POST | `/notes/:id/permanent`, `/notes/trash/empty` | ✅ | Delete forever |
+| GET / POST | `/notes/:id/versions`, `/notes/:id/versions/:versionId/restore` | ✅ | Version history |
 | POST | `/notes/:id/links` | ✅ | Additional share link |
 | POST | `/notes/:id/links/:linkId/revoke` | ✅ | Revoke one link |
 | POST | `/notes/:id/links/revoke-all` | ✅ | Revoke all links of a note |
 | POST | `/notes/:id/links/:linkId/regenerate-key` | ✅ | New access key |
+| POST | `/notes/:id/links/:linkId/extend` | ✅ | Change expiry |
 | GET | `/notes/:id/links/:linkId/views` | ✅ | Activity log |
 | GET | `/share/:token` | – | Landing metadata (no content, no count) |
 | POST | `/share/:token/access` | – | Open / unlock — the only content endpoint |
-| PATCH | `/account` | ✅ | Name & preferences |
+| GET/PATCH | `/account`, `/account/preferences` | ✅ | Profile & settings |
+| GET/PUT/DELETE | `/account/avatar` | ✅ | Profile photo (JPEG/PNG/WebP ≤ 100 KB) |
 | POST | `/account/password` | ✅ | Change password |
-| GET/DELETE | `/account/sessions[/:handle]` | ✅ | Devices |
+| POST | `/account/2fa/setup`, `enable`, `disable`, `backup-codes` | ✅ | Two-factor authentication |
+| GET | `/account/security-log` | ✅ | Security events |
+| GET/DELETE/POST | `/account/sessions`, `/account/sessions/:handle`, `/account/sessions/revoke-others` | ✅ | Devices |
 | GET | `/account/export` | ✅ | JSON export |
+| POST | `/account/feedback` | ✅ | Send feedback |
 | DELETE | `/account` | ✅ | Delete account (password required) |
-| GET/POST | `/ai/status`, `/ai/assist` | ✅ | AI availability / streamed rewrite |
+| GET | `/dashboard`, `/links` | ✅ | Dashboard stats, all share links |
+| GET/POST/DELETE | `/notifications`, `/notifications/read-all`, `/notifications/:id/read` | ✅ | Notifications |
+| GET/POST | `/ai/status`, `/ai/assist`, `/ai/generate`, `/ai/chat` | ✅ | AI availability; streamed rewrite, generation and assistant |
+| POST | `/ai/tags`, `/ai/smart-share` | ✅ | Structured AI suggestions (JSON schema) |
+| GET | `/cron/cleanup` | Bearer `CRON_SECRET` | Daily cleanup job |
 
 Status codes used: `401` wrong/missing key or not signed in · `404` invalid link · `410` expired/used/revoked · `422` validation · `423` link locked · `429` rate limited.
 
@@ -402,10 +421,24 @@ Status codes used: `401` wrong/missing key or not signed in · `404` invalid lin
 ## Testing
 
 ```bash
-npm test               # 29 unit tests: tokens, keys, scrypt, link status, validation, redirects, security advisor
+npm test               # unit tests: tokens, keys, scrypt, link status, validation, redirects, security advisor, TOTP (RFC 6238 vectors), editor formatting, preferences
 npm run dev            # in one terminal
 npm run test:race      # concurrency scenarios against the running server (BASE_URL=… for a deployment)
 ```
+
+---
+
+## Performance
+
+What keeps pages fast on mid-range phones:
+
+- **Server-rendered data.** App pages prefetch their data on the server by calling the Hono API in-process (`src/server/prefetch.ts` — same handlers, auth and ownership checks) and hand it to React Query, so the HTML already contains the notes and dashboard instead of loading skeletons.
+- **No large `<Suspense>` wrappers around page content.** React 19.2 streams large boundaries at the end of the HTML and reveals them later with a script; keeping page content outside them lets the browser paint it straight away.
+- **Small startup JavaScript.** zod, the Markdown renderer, the toast library, the command palette, the AI assistant, dialogs, QR codes and version history are code-split and loaded on first use; public pages avoid Radix and React Query entirely; animations are plain CSS.
+- **Cheap painting.** No `backdrop-filter`, SVG turbulence filters or fixed full-screen layers; a 5 KB tiled PNG provides the paper grain.
+- **Region.** `vercel.json` pins functions to Singapore (`sin1`), next to the Neon database (`ap-southeast-1`), so each query is a ~1 ms round trip.
+
+Lighthouse and automated-test results are in `docs/Cachet-Test-Report.pdf`. After deploying, check the live site at [PageSpeed Insights](https://pagespeed.web.dev).
 
 ---
 
@@ -413,10 +446,11 @@ npm run test:race      # concurrency scenarios against the running server (BASE_
 
 Deployed on **Vercel** (Next.js + Hono in one project) with **Neon** serverless Postgres.
 
-1. Create a Neon project and copy the **pooled** connection string (host contains `-pooler`, keep `?sslmode=require`)
-2. Import the GitHub repository in Vercel and add the environment variables (`DATABASE_URL`, `APP_SECRET`, `APP_URL`, optionally `ANTHROPIC_API_KEY`)
-3. Deploy — the `vercel-build` script runs `drizzle-kit migrate` before `next build`
-4. Optionally seed the demo account: `DATABASE_URL=<neon-url> APP_URL=<vercel-url> npm run db:seed`
+1. Create a Neon project (region *Asia Pacific (Singapore)*) and copy the **pooled** connection string (host contains `-pooler`, keep `?sslmode=require`)
+2. Import the GitHub repository in Vercel. If the app sits in a sub-folder of the repository, set **Root Directory** to that folder (`cachet`)
+3. Add the environment variables: `DATABASE_URL`, `APP_SECRET`, optionally `GEMINI_API_KEY`, `GEMINI_MODEL` and `CRON_SECRET`. `APP_URL` is optional on Vercel — the production domain is used automatically
+4. Deploy — the `vercel-build` script runs `drizzle-kit migrate` before `next build`; `vercel.json` sets the region (`sin1`) and the daily cleanup cron
+5. Optionally seed the demo account: `npm run db:seed` with `DATABASE_URL` pointing at Neon
 
 ---
 
@@ -425,22 +459,26 @@ Deployed on **Vercel** (Next.js + Hono in one project) with **Neon** serverless 
 ```
 src/
 ├─ app/
+│  ├─ (marketing)/                   # landing, help, terms, privacy, security
 │  ├─ (auth)/login, register        # public auth pages (redirect if signed in)
-│  ├─ (app)/notes, notes/new,        # private pages (server layout checks the session)
-│  │        notes/[id], settings
+│  ├─ (app)/dashboard, notes,        # private pages (server layout checks the session
+│  │        notes/new, notes/[id],   #  and the pages prefetch their data on the server)
+│  │        links, notifications, trash, profile, settings
 │  ├─ share/[token]/                 # public viewer
 │  └─ api/[[...route]]/route.ts      # hands every /api request to Hono
 ├─ server/                           # never shipped to the browser ("server-only")
 │  ├─ app.ts                         # Hono app: security middleware, error handler, routes
-│  ├─ routes/                        # auth, notes, share, account, ai
+│  ├─ routes/                        # auth, notes, share, account, ai, workspace, cron
+│  ├─ prefetch.ts                    # in-process API calls for server-rendered page data
 │  ├─ services/share.ts              # link creation, access, lockout, race-safe claim
 │  ├─ auth/                          # sessions
 │  ├─ lib/                           # crypto, scrypt, rate limiting, request helpers
 │  └─ db/                            # Drizzle schema + client
 ├─ components/                       # UI (shadcn/ui primitives in components/ui)
-├─ lib/                              # shared: zod schemas, typed API client, formatting
+├─ lib/                              # shared: constants, zod schemas (server), client checks, typed API client, formatting
 └─ proxy.ts                          # per-request CSP nonce
 drizzle/                             # SQL migrations
 scripts/                             # seed, race test, local embedded Postgres
+docs/                                # test report (Lighthouse + automated tests)
 tests/                               # unit tests
 ```

@@ -2,6 +2,7 @@ import { format, formatDistanceToNowStrict, isToday, isYesterday } from "date-fn
 
 export function relativeTime(iso: string | Date, now = new Date()) {
   const date = typeof iso === "string" ? new Date(iso) : iso;
+  if (Math.abs(date.getTime() - now.getTime()) < 30_000) return "just now";
   const past = date.getTime() < now.getTime();
   const distance = formatDistanceToNowStrict(date);
   return past ? `${distance} ago` : `in ${distance}`;
@@ -12,6 +13,11 @@ export function friendlyDate(iso: string | Date) {
   if (isToday(date)) return `Today, ${format(date, "h:mm a")}`;
   if (isYesterday(date)) return `Yesterday, ${format(date, "h:mm a")}`;
   return format(date, "d MMM yyyy, h:mm a");
+}
+
+/** "29 September 2026" — for dates where the time of day doesn't matter. */
+export function longDate(iso: string | Date) {
+  return format(typeof iso === "string" ? new Date(iso) : iso, "d MMMM yyyy");
 }
 
 export function fullDate(iso: string | Date) {

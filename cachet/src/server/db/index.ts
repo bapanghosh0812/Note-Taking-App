@@ -12,7 +12,8 @@ const globalForDb = globalThis as unknown as { __db?: Database };
 function createDb(): Database {
   const client = postgres(env().DATABASE_URL, {
     max: 5,
-    idle_timeout: 20,
+    // Opening a TLS connection costs several round trips; keep idle ones a while.
+    idle_timeout: 120,
     connect_timeout: 10,
     // Required for PgBouncer-style poolers (e.g. Neon's "-pooler" host) in transaction mode.
     prepare: false,

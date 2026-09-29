@@ -5,7 +5,7 @@ import { getCurrentUser } from "@/server/auth/current-user";
 
 export default async function AuthLayout({ children }: LayoutProps<"/">) {
   // Already signed in → straight to the notes.
-  if (await getCurrentUser()) redirect("/notes");
+  if (await getCurrentUser()) redirect("/dashboard");
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-[1.05fr_1fr]">
@@ -17,8 +17,8 @@ export default async function AuthLayout({ children }: LayoutProps<"/">) {
 
         <div className="relative mx-auto flex max-w-md flex-col items-center text-center">
           <div className="relative mb-10">
-            <div className="bg-gold/20 absolute inset-0 -z-10 scale-150 rounded-full blur-3xl" />
-            <SealMark className="animate-float size-40 drop-shadow-[0_30px_40px_oklch(0.5_0.12_70/45%)]" />
+            <div className="absolute inset-0 -z-10 scale-[2.2] bg-[radial-gradient(closest-side,var(--gold-soft),transparent)]" />
+            <SealMark className="animate-float size-40" />
           </div>
           <blockquote className="font-display text-4xl leading-tight tracking-tight">
             “Some words are meant for <em className="text-gold-gradient">one pair of eyes</em>.”

@@ -18,7 +18,7 @@ const buttonVariants = cva(
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",
-        gold: "bg-[linear-gradient(135deg,oklch(0.86_0.09_86),oklch(0.74_0.12_72)_55%,oklch(0.82_0.1_80))] text-[oklch(0.2_0.02_70)] shadow-[0_8px_24px_-10px_oklch(0.74_0.12_72/70%),inset_0_1px_0_oklch(1_0_0/45%)] hover:brightness-105 hover:shadow-[0_10px_30px_-10px_oklch(0.74_0.12_72/85%),inset_0_1px_0_oklch(1_0_0/45%)]",
+        gold: "bg-accent-gradient hover:brightness-105",
       },
       size: {
         default:

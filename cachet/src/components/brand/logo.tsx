@@ -43,7 +43,7 @@ export function SealMark({ className, title = "Cachet" }: { className?: string; 
 export function Logo({ className, markClassName }: { className?: string; markClassName?: string }) {
   return (
     <span className={cn("inline-flex items-center gap-2.5", className)}>
-      <SealMark className={cn("size-8 drop-shadow-[0_4px_10px_oklch(0.6_0.12_75/35%)]", markClassName)} />
+      <SealMark className={cn("size-8", markClassName)} />
       <span className="font-display text-[1.6rem] leading-none tracking-tight">Cachet</span>
     </span>
   );

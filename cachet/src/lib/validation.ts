@@ -1,20 +1,13 @@
 import { z } from "zod";
+import { ACCESS_TYPES, AI_ACTIONS, AI_LANGUAGES, AI_TONES, AVATAR_COLORS, LIMITS, NOTE_COLORS, SHARE_TYPES } from "./constants";
 
 /**
  * Validation schemas shared by the browser (form feedback) and the API
  * (the source of truth — the server never trusts client-side validation).
  */
 
-export const LIMITS = {
-  titleMax: 200,
-  contentMax: 50_000,
-  labelMax: 60,
-  nameMax: 80,
-  passwordMin: 10,
-  passwordMax: 128,
-  minExpiryMinutes: 2,
-  maxExpiryDays: 365,
-} as const;
+export { ACCESS_TYPES, AI_ACTIONS, AVATAR_COLORS, LIMITS, NOTE_COLORS, SHARE_TYPES } from "./constants";
+export type { AccessType, AiAction, ShareType } from "./constants";
 
 const email = z
   .string()
@@ -33,6 +26,7 @@ export const registerSchema = z.object({
   name: z.string().trim().min(1, "Tell us your name").max(LIMITS.nameMax),
   email,
   password,
+  acceptTerms: z.literal(true, { error: "Please accept the Terms and Privacy Policy" }),
 });
 
 export const loginSchema = z.object({
@@ -41,8 +35,17 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Enter your password").max(LIMITS.passwordMax),
 });
 
-export const shareTypeSchema = z.enum(["one_time", "time_based"]);
-export const accessTypeSchema = z.enum(["public", "password"]);
+export const twoFactorLoginSchema = z.object({
+  ticket: z.string().min(10).max(300),
+  code: z.string().trim().min(6, "Enter the 6-digit code").max(12),
+});
+
+export const totpCodeSchema = z.object({
+  code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your app"),
+});
+
+export const shareTypeSchema = z.enum(SHARE_TYPES);
+export const accessTypeSchema = z.enum(ACCESS_TYPES);
 
 export const shareSettingsSchema = z.object({
   shareType: shareTypeSchema,
@@ -59,6 +62,11 @@ export const shareSettingsSchema = z.object({
 });
 
 const title = z.string().trim().min(1, "Give your note a title").max(LIMITS.titleMax);
+
+const tags = z
+  .array(z.string().trim().toLowerCase().min(1).max(24).regex(/^[\p{L}\p{N} _-]+$/u, "Tags can use letters, numbers, spaces, - and _"))
+  .max(10, "Up to 10 tags")
+  .transform((list) => [...new Set(list)]);
 const content = z
   .string()
   .max(LIMITS.contentMax, `Notes are limited to ${LIMITS.contentMax.toLocaleString()} characters`)
@@ -67,12 +75,33 @@ const content = z
 export const createNoteSchema = z.object({
   title,
   content,
-  share: shareSettingsSchema,
+  tags: tags.optional(),
+  color: z.enum(NOTE_COLORS).optional(),
+  pinned: z.boolean().optional(),
+  // Optional so notes can also be saved privately and shared later.
+  share: shareSettingsSchema.optional(),
 });
 
 export const updateNoteSchema = z
-  .object({ title: title.optional(), content: content.optional() })
-  .refine((v) => v.title !== undefined || v.content !== undefined, "Nothing to update");
+  .object({
+    title: title.optional(),
+    content: content.optional(),
+    tags: tags.optional(),
+    color: z.enum(NOTE_COLORS).optional(),
+    pinned: z.boolean().optional(),
+    archived: z.boolean().optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), "Nothing to update");
+
+export const extendLinkSchema = z.object({
+  expiresAt: shareSettingsSchema.shape.expiresAt,
+});
+
+export const feedbackSchema = z.object({
+  kind: z.enum(["idea", "bug", "praise", "question"]),
+  message: z.string().trim().min(5, "Tell us a little more").max(2000),
+  page: z.string().max(200).optional(),
+});
 
 export const unlockSchema = z.object({
   key: z.string().max(64).optional(),
@@ -80,14 +109,8 @@ export const unlockSchema = z.object({
 
 export const profileSchema = z.object({
   name: z.string().trim().min(1).max(LIMITS.nameMax).optional(),
-  preferences: z
-    .object({
-      defaultShareType: shareTypeSchema.optional(),
-      defaultAccessType: accessTypeSchema.optional(),
-      defaultExpiry: z.enum(["1h", "24h", "7d", "30d"]).optional(),
-      aiEnabled: z.boolean().optional(),
-    })
-    .optional(),
+  bio: z.string().trim().max(160).optional(),
+  avatarColor: z.enum(AVATAR_COLORS).optional(),
 });
 
 export const changePasswordSchema = z.object({
@@ -99,13 +122,30 @@ export const deleteAccountSchema = z.object({
   password: z.string().min(1, "Enter your password").max(LIMITS.passwordMax),
 });
 
-export const aiActions = ["improve", "summarize", "title", "grammar", "shorten", "expand", "bulletize"] as const;
+export const aiActions = AI_ACTIONS;
 export const aiAssistSchema = z.object({
   action: z.enum(aiActions),
   text: z.string().trim().min(1, "Write something first").max(20_000),
+  language: z.enum(AI_LANGUAGES).optional(),
+  tone: z.enum(AI_TONES).optional(),
 });
 
-export type ShareType = z.infer<typeof shareTypeSchema>;
-export type AccessType = z.infer<typeof accessTypeSchema>;
+export const aiGenerateSchema = z.object({
+  prompt: z.string().trim().min(3, "Describe what you want to write").max(2000),
+  format: z.enum(["note", "checklist", "meeting", "email", "plan"]).default("note"),
+});
+
+export const aiTextSchema = z.object({
+  title: z.string().max(LIMITS.titleMax).optional(),
+  text: z.string().trim().min(1, "Write something first").max(20_000),
+});
+
+export const aiChatSchema = z.object({
+  messages: z
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().trim().min(1).max(4000) }))
+    .min(1)
+    .max(24),
+  noteId: z.string().uuid().optional(),
+});
+
 export type ShareSettings = z.infer<typeof shareSettingsSchema>;
-export type AiAction = (typeof aiActions)[number];

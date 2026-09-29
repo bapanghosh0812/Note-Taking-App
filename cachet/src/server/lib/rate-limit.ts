@@ -17,7 +17,9 @@ export const RULES = {
   registerPerIp: { name: "register:ip", limit: 5, windowSeconds: 60 * 60 },
   shareAccessPerIp: { name: "share:ip", limit: 60, windowSeconds: 60 },
   shareUnlockPerIp: { name: "unlock:ip", limit: 20, windowSeconds: 10 * 60 },
-  aiPerUser: { name: "ai:user", limit: 30, windowSeconds: 60 * 60 },
+  aiPerUser: { name: "ai:user", limit: 60, windowSeconds: 60 * 60 },
+  totpPerUser: { name: "2fa:user", limit: 6, windowSeconds: 15 * 60 },
+  feedbackPerUser: { name: "feedback:user", limit: 10, windowSeconds: 60 * 60 },
   writePerUser: { name: "write:user", limit: 120, windowSeconds: 60 },
 } satisfies Record<string, RateLimitRule>;
 

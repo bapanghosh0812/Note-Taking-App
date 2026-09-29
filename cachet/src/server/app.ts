@@ -1,27 +1,21 @@
 import "server-only";
 import { Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import { ApiError } from "./lib/errors";
-import { noStore, originCheck, sessionMiddleware, type AppEnv } from "./middleware";
+import { bodyLimit, noStore, originCheck, sessionMiddleware, type AppEnv } from "./middleware";
 import { accountRoutes } from "./routes/account";
 import { aiRoutes } from "./routes/ai";
 import { authRoutes } from "./routes/auth";
+import { cronRoutes } from "./routes/cron";
 import { notesRoutes } from "./routes/notes";
 import { shareRoutes } from "./routes/share";
+import { dashboardRoutes, linksRoutes, notificationsRoutes } from "./routes/workspace";
 
 const base = new Hono<AppEnv>().basePath("/api");
 
 base.use(secureHeaders({ crossOriginResourcePolicy: "same-origin" }));
 base.use(noStore);
-base.use(
-  bodyLimit({
-    maxSize: 128 * 1024, // 128 KB — comfortably above the 50k-char note limit
-    onError: () => {
-      throw new ApiError(413, "bad_request", "Request body is too large.");
-    },
-  }),
-);
+base.use(bodyLimit(128 * 1024)); // 128 KB — comfortably above the 50k-character note limit
 base.use(originCheck);
 base.use(sessionMiddleware);
 
@@ -47,6 +41,10 @@ export const app = base
   .route("/notes", notesRoutes)
   .route("/share", shareRoutes)
   .route("/account", accountRoutes)
-  .route("/ai", aiRoutes);
+  .route("/ai", aiRoutes)
+  .route("/dashboard", dashboardRoutes)
+  .route("/links", linksRoutes)
+  .route("/notifications", notificationsRoutes)
+  .route("/cron", cronRoutes);
 
 export type AppType = typeof app;

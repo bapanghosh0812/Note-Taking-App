@@ -3,6 +3,7 @@
 import {
   Ban,
   Clock,
+  FileDown,
   Flame,
   Globe2,
   Hourglass,
@@ -10,21 +11,27 @@ import {
   Link2Off,
   Loader2,
   Lock,
+  Printer,
   ShieldCheck,
   TimerOff,
   type LucideIcon,
 } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Logo, SealMark } from "@/components/brand/logo";
 import { CopyButton } from "@/components/copy-button";
-import { Markdown } from "@/components/markdown";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/use-now";
 import { ApiClientError, api, unwrap } from "@/lib/api-client";
 import { countdown, friendlyDate } from "@/lib/format";
+import { downloadText, slugify, toMarkdown } from "@/lib/note-export";
 import { cn } from "@/lib/utils";
+
+// The Markdown renderer is only needed once a note is revealed, so it isn't part of the initial download.
+const Markdown = dynamic(() => import("@/components/markdown").then((m) => m.Markdown), {
+  loading: () => <div className="bg-muted h-40 animate-pulse rounded-xl" />,
+});
 
 type Meta = { shareType: "one_time" | "time_based"; accessType: "public" | "password"; expiresAt: string; lockedUntil: string | null };
 type Revealed = {
@@ -145,23 +152,17 @@ export function ShareViewer({ token }: { token: string }) {
       </header>
 
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col items-center px-5 pb-16">
-        <AnimatePresence mode="wait">
-          {state.kind === "revealed" ? (
+        {state.kind === "revealed" ? (
             <RevealedNote key="revealed" data={state.data} />
           ) : (
-            <motion.div
-              key="envelope"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.25 } }}
-              className="mt-6 w-full max-w-md sm:mt-12"
-            >
+            // CSS (not JS) animation, so the card is visible as soon as the HTML arrives.
+            <div key="envelope" className="animate-rise mt-6 w-full max-w-md sm:mt-12">
               <div className="hairline glass relative overflow-hidden rounded-3xl px-6 pt-14 pb-8 text-center sm:px-8">
                 <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(22rem_10rem_at_50%_0%,var(--gold-soft),transparent_70%)]" />
                 <div className="relative mx-auto -mt-2 mb-6 w-fit">
                   <SealMark
                     className={cn(
-                      "size-24 drop-shadow-[0_16px_28px_oklch(0.5_0.12_70/45%)]",
+                      "size-24",
                       (state.kind === "loading" || state.kind === "unlocking") && "animate-pulse",
                     )}
                   />
@@ -192,9 +193,8 @@ export function ShareViewer({ token }: { token: string }) {
                   Create a free Cachet account
                 </Link>
               </p>
-            </motion.div>
+            </div>
           )}
-        </AnimatePresence>
       </main>
     </div>
   );
@@ -253,7 +253,7 @@ function Gate({
         }}
       >
         {needsKey && (
-          <motion.div key={shakeId} animate={shakeId ? { x: [0, -10, 10, -8, 8, -4, 4, 0] } : {}} transition={{ duration: 0.45 }}>
+          <div key={shakeId} className={cn(shakeId > 0 && "animate-shake")}>
             <label htmlFor="access-key" className="sr-only">
               Access key
             </label>
@@ -280,7 +280,7 @@ function Gate({
                 {keyError}
               </p>
             )}
-          </motion.div>
+          </div>
         )}
 
         {(needsKey || oneTime) && (
@@ -344,27 +344,21 @@ function RevealedNote({ data }: { data: Revealed }) {
   const msLeft = new Date(link.expiresAt).getTime() - now;
 
   return (
-    <motion.div initial="hidden" animate="shown" className="relative mt-4 w-full max-w-3xl">
+    <div className="relative mt-4 w-full max-w-3xl">
       {/* The seal splits in two as the note unfolds. */}
       <div className="pointer-events-none absolute inset-x-0 -top-2 z-20 flex justify-center" aria-hidden>
         {[-1, 1].map((dir) => (
-          <motion.div
+          <div
             key={dir}
-            className="absolute"
+            className={cn("absolute", dir < 0 ? "animate-seal-left" : "animate-seal-right")}
             style={{ clipPath: dir < 0 ? "inset(0 50% 0 0)" : "inset(0 0 0 50%)" }}
-            variants={{ hidden: { x: 0, rotate: 0, opacity: 1 }, shown: { x: dir * 90, y: 40, rotate: dir * 35, opacity: 0 } }}
-            transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
           >
             <SealMark className="size-24" />
-          </motion.div>
+          </div>
         ))}
       </div>
 
-      <motion.article
-        variants={{ hidden: { opacity: 0, y: 30, scale: 0.98 }, shown: { opacity: 1, y: 0, scale: 1 } }}
-        transition={{ delay: 0.25, duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-        className="hairline bg-card relative overflow-hidden rounded-3xl"
-      >
+      <article className="hairline bg-card animate-unfold relative overflow-hidden rounded-3xl">
         <div className="via-gold/60 h-px bg-gradient-to-r from-transparent to-transparent" />
         <div className="px-6 pt-10 pb-8 sm:px-12 sm:pt-14">
           <p className="text-gold text-xs font-medium tracking-[0.2em] uppercase">Shared by {note.sharedBy}</p>
@@ -392,9 +386,17 @@ function RevealedNote({ data }: { data: Revealed }) {
               </>
             )}
           </p>
-          <CopyButton value={`${note.title}\n\n${note.content}`} label="Copy text" successMessage="Note copied" />
+          <div className="flex flex-wrap gap-2 print:hidden">
+            <CopyButton value={`${note.title}\n\n${note.content}`} label="Copy text" successMessage="Note copied" />
+            <Button type="button" variant="outline" size="sm" onClick={() => downloadText(`${slugify(note.title)}.md`, toMarkdown(note))}>
+              <FileDown /> Download
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => window.print()}>
+              <Printer /> Print
+            </Button>
+          </div>
         </div>
-      </motion.article>
-    </motion.div>
+      </article>
+    </div>
   );
 }

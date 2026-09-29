@@ -42,7 +42,7 @@ describe("createNoteSchema", () => {
 describe("safeRedirect", () => {
   it("keeps same-site paths", () => expect(safeRedirect("/notes/123")).toBe("/notes/123"));
   it.each(["https://evil.com", "//evil.com", "/\\evil.com", "javascript:alert(1)", null])("blocks %s", (target) =>
-    expect(safeRedirect(target)).toBe("/notes"),
+    expect(safeRedirect(target)).toBe("/dashboard"),
   );
 });
 

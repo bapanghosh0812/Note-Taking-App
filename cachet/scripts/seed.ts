@@ -8,7 +8,7 @@
  */
 import { config } from "dotenv";
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { notes, shareLinks, users } from "../src/server/db/schema";
@@ -76,7 +76,7 @@ async function main() {
 
   // Reset: removing the user cascades to its notes, links and sessions.
   await db.delete(users).where(eq(users.email, email));
-  const [user] = await db.insert(users).values({ email, name: "Demo User", passwordHash }).returning({ id: users.id });
+  const [user] = await db.insert(users).values({ email, name: "Demo User", passwordHash, termsAcceptedAt: sql`now()`, bio: "Exploring Cachet — private notes with sealed links." }).returning({ id: users.id });
 
   console.log(`\nDemo account ready: ${email}\n`);
   for (const sample of SAMPLES) {

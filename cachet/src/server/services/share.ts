@@ -13,10 +13,12 @@ import {
 } from "../lib/crypto";
 import { ApiError } from "../lib/errors";
 import type { ShareSettings } from "@/lib/validation";
+import { notify } from "./activity";
 
 /** Wrong keys allowed before a link is temporarily locked. */
 export const MAX_FAILED_ATTEMPTS = 5;
 export const LOCK_MINUTES = 15;
+const VIEW_MILESTONES = new Set([1, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000]);
 
 export type LinkStatus = "active" | "used" | "expired" | "revoked" | "locked";
 
@@ -194,11 +196,32 @@ export async function accessSharedNote(token: string, providedKey: string | unde
     });
 
     const [note] = await tx
-      .select({ title: notes.title, content: notes.content, updatedAt: notes.updatedAt, ownerName: users.name })
+      .select({
+        id: notes.id,
+        title: notes.title,
+        content: notes.content,
+        updatedAt: notes.updatedAt,
+        ownerId: notes.ownerId,
+        ownerName: users.name,
+      })
       .from(notes)
       .innerJoin(users, eq(users.id, notes.ownerId))
       .where(eq(notes.id, link.noteId))
       .limit(1);
+
+    // Tell the owner — every one-time open, and milestones for reusable links (not every single view).
+    if (link.shareType === "one_time" || VIEW_MILESTONES.has(claimed.viewCount)) {
+      await notify(
+        note!.ownerId,
+        {
+          type: "link_viewed",
+          title: link.shareType === "one_time" ? `Your one-time note “${note!.title}” was opened` : `“${note!.title}” reached ${claimed.viewCount} view${claimed.viewCount === 1 ? "" : "s"}`,
+          body: `${link.label ? `Link “${link.label}”` : "A share link"} · ${link.accessType === "password" ? "unlocked with the access key" : "public view"}`,
+          href: `/notes/${note!.id}`,
+        },
+        tx,
+      );
+    }
 
     return { claimed, note: note! };
   });
@@ -237,8 +260,7 @@ const lockInterval = sql`make_interval(mins => ${LOCK_MINUTES})`;
  * If no slot is free the link is (or becomes) locked.
  */
 async function reserveAttempt(linkId: string) {
-  const db = getDb();
-  const [reserved] = await db
+  const [reserved] = await getDb()
     .update(shareLinks)
     .set({ failedAttempts: sql`${shareLinks.failedAttempts} + 1` })
     .where(
@@ -251,37 +273,55 @@ async function reserveAttempt(linkId: string) {
     .returning({ id: shareLinks.id });
   if (reserved) return;
 
-  // Already locked, or every slot is taken by in-flight guesses: (keep) lock the link.
-  const [row] = await db
-    .update(shareLinks)
-    .set({
-      lockedUntil: sql`CASE WHEN ${shareLinks.lockedUntil} > now() THEN ${shareLinks.lockedUntil} ELSE now() + ${lockInterval} END`,
-      failedAttempts: 0,
-    })
-    .where(eq(shareLinks.id, linkId))
-    .returning({ lockedUntil: shareLinks.lockedUntil });
-  throw lockedError(row?.lockedUntil ?? new Date(Date.now() + LOCK_MINUTES * 60_000));
+  // Already locked, or every slot is taken by in-flight guesses.
+  throw lockedError(await lockLink(linkId));
 }
 
 /**
- * The reserved slot stays counted. Once all slots are used the link locks for
- * LOCK_MINUTES and the counter resets (both columns are computed from the
- * same pre-update row, in one statement).
+ * A wrong key keeps its reserved slot. The request that finds every slot used
+ * locks the link. Only one request can make that transition, because the
+ * UPDATE also requires the link to be currently unlocked.
  */
 async function recordFailedAttempt(linkId: string): Promise<never> {
-  const [row] = await getDb()
-    .update(shareLinks)
-    .set({
-      lockedUntil: sql`CASE WHEN ${shareLinks.failedAttempts} >= ${MAX_FAILED_ATTEMPTS} THEN now() + ${lockInterval} ELSE ${shareLinks.lockedUntil} END`,
-      failedAttempts: sql`CASE WHEN ${shareLinks.failedAttempts} >= ${MAX_FAILED_ATTEMPTS} THEN 0 ELSE ${shareLinks.failedAttempts} END`,
-    })
+  const db = getDb();
+  const [row] = await db
+    .select({ failedAttempts: shareLinks.failedAttempts, lockedUntil: shareLinks.lockedUntil })
+    .from(shareLinks)
     .where(eq(shareLinks.id, linkId))
-    .returning({ failedAttempts: shareLinks.failedAttempts, lockedUntil: shareLinks.lockedUntil });
+    .limit(1);
 
-  if (row?.lockedUntil && row.lockedUntil > new Date()) throw lockedError(row.lockedUntil);
+  if (row && row.lockedUntil && row.lockedUntil > new Date()) throw lockedError(row.lockedUntil);
+  if (row && row.failedAttempts >= MAX_FAILED_ATTEMPTS) throw lockedError(await lockLink(linkId));
+
   throw new ApiError(401, "key_invalid", "That access key is not correct.", {
     attemptsRemaining: Math.max(0, MAX_FAILED_ATTEMPTS - (row?.failedAttempts ?? 0)),
   });
+}
+
+/** Locks the link (if not already locked) and alerts the owner the first time. */
+async function lockLink(linkId: string): Promise<Date> {
+  const db = getDb();
+  const [locked] = await db
+    .update(shareLinks)
+    .set({ lockedUntil: sql`now() + ${lockInterval}`, failedAttempts: 0 })
+    .where(and(eq(shareLinks.id, linkId), or(isNull(shareLinks.lockedUntil), lte(shareLinks.lockedUntil, sql`now()`))))
+    .returning({ lockedUntil: shareLinks.lockedUntil, noteId: shareLinks.noteId, label: shareLinks.label });
+
+  if (locked) {
+    const [note] = await db.select({ ownerId: notes.ownerId, title: notes.title }).from(notes).where(eq(notes.id, locked.noteId)).limit(1);
+    if (note) {
+      await notify(note.ownerId, {
+        type: "link_locked",
+        title: `A link to “${note.title}” was locked`,
+        body: `Someone entered ${MAX_FAILED_ATTEMPTS} wrong access keys${locked.label ? ` on “${locked.label}”` : ""}. It is paused for ${LOCK_MINUTES} minutes — issue a new key if you suspect a leak.`,
+        href: `/notes/${locked.noteId}`,
+      });
+    }
+    return locked.lockedUntil!;
+  }
+
+  const [current] = await db.select({ lockedUntil: shareLinks.lockedUntil }).from(shareLinks).where(eq(shareLinks.id, linkId)).limit(1);
+  return current?.lockedUntil ?? new Date(Date.now() + LOCK_MINUTES * 60_000);
 }
 
 function lockedError(until: Date) {

@@ -12,6 +12,8 @@ import {
 import { ApiError } from "./lib/errors";
 
 export type AppEnv = {
+  /** Set only by in-process calls from Server Components (see server/prefetch.ts). */
+  Bindings: { internalPrefetch?: boolean };
   Variables: {
     user: SessionUser | null;
     sessionId: string | null;
@@ -19,6 +21,7 @@ export type AppEnv = {
 };
 
 export type AuthedEnv = {
+  Bindings: AppEnv["Bindings"];
   Variables: {
     user: SessionUser;
     sessionId: string;
@@ -43,7 +46,8 @@ export function clearSessionCookie(c: Parameters<typeof deleteCookie>[0]) {
 /** Attaches the signed-in user (or null) to every request. */
 export const sessionMiddleware = createMiddleware<AppEnv>(async (c, next) => {
   const token = getCookie(c, sessionCookieName());
-  const session = await validateSession(token);
+  // In-process prefetches can't deliver a refreshed cookie, so they never renew.
+  const session = await validateSession(token, { renew: c.env?.internalPrefetch !== true });
   c.set("user", session?.user ?? null);
   c.set("sessionId", session?.sessionId ?? null);
   if (session?.renewedExpiresAt && token) setSessionCookie(c, token, session.renewedExpiresAt);
@@ -78,9 +82,30 @@ export const originCheck = createMiddleware(async (c, next) => {
   await next();
 });
 
+/**
+ * Rejects oversized bodies before they are read. Browsers always send
+ * Content-Length for fetch() bodies; chunked uploads (no length) are refused
+ * with 411 so a client can't stream an unbounded body past the check.
+ */
+export function bodyLimit(maxBytes: number) {
+  return createMiddleware(async (c, next) => {
+    const length = c.req.header("content-length");
+    if (length !== undefined) {
+      if (!/^\d+$/.test(length) || Number(length) > maxBytes) {
+        throw new ApiError(413, "bad_request", "Request body is too large.");
+      }
+    } else if (c.req.header("transfer-encoding")) {
+      throw new ApiError(411, "bad_request", "Content-Length is required.");
+    }
+    await next();
+  });
+}
+
 /** API responses are private and must never be stored by a browser or CDN cache. */
 export const noStore = createMiddleware(async (c, next) => {
   await next();
+  // A handler may opt in to caching explicitly (e.g. the versioned avatar image).
+  if (c.res.headers.get("Cache-Control")) return;
   c.header("Cache-Control", "no-store, max-age=0");
   c.header("Pragma", "no-cache");
 });

@@ -13,6 +13,8 @@ const pg = new EmbeddedPostgres({
   password: "cachet",
   port,
   persistent: true,
+  // Force UTF-8: on Windows initdb otherwise picks WIN1252, which cannot store characters like →.
+  initdbFlags: ["--encoding=UTF8", "--locale=C"],
 });
 
 if (!existsSync(dataDir)) {

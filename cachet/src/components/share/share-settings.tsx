@@ -1,8 +1,13 @@
 "use client";
 
-import { Clock, Flame, Globe2, KeyRound, ShieldAlert, Wand2, type LucideIcon } from "lucide-react";
-import { useMemo } from "react";
+import { Clock, Flame, Globe2, KeyRound, Loader2, ShieldAlert, Sparkles, Wand2, type LucideIcon } from "lucide-react";
+import { useMemo, useState } from "react";
+import { toast } from "@/lib/toast";
+import { useAiStatus } from "@/hooks/use-notes";
+import { usePreferences } from "@/hooks/use-preferences";
+import { api, errorMessage, unwrap } from "@/lib/api-client";
 import { FormField } from "@/components/form-field";
+import { useHydrated } from "@/hooks/use-hydrated";
 import { useNow } from "@/hooks/use-now";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +15,7 @@ import { EXPIRY_PRESETS, presetToDate, toLocalInputValue, type ExpiryPresetId } 
 import { friendlyDate } from "@/lib/format";
 import type { Finding } from "@/lib/sensitive";
 import { cn } from "@/lib/utils";
-import { LIMITS, type AccessType, type ShareType } from "@/lib/validation";
+import { LIMITS, type AccessType, type ShareType } from "@/lib/constants";
 
 export type ShareDraft = {
   accessType: AccessType;
@@ -97,18 +102,54 @@ function OptionCard({
   );
 }
 
+/** Asks Gemini to judge the note's sensitivity and pre-fills the safest sensible settings. */
+function SmartShareButton({ note, value, onChange }: { note: { title: string; content: string }; value: ShareDraft; onChange: (d: ShareDraft) => void }) {
+  const { prefs } = usePreferences();
+  const { data: ai } = useAiStatus();
+  const [pending, setPending] = useState(false);
+  const [reason, setReason] = useState<string | null>(null);
+  if (!prefs.smartShare || !ai?.available || !ai.enabled) return null;
+
+  async function recommend() {
+    if (!note.content.trim()) return toast.info("Write the note first, then ask for a recommendation.");
+    setPending(true);
+    try {
+      const r = await unwrap(api.ai["smart-share"].$post({ json: { title: note.title, text: note.content } }));
+      onChange({ ...value, accessType: r.accessType, shareType: r.shareType, expiry: r.expiry });
+      setReason(`${r.sensitivity[0]!.toUpperCase()}${r.sensitivity.slice(1)} sensitivity — ${r.reason}`);
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Button type="button" variant="outline" size="sm" className="border-gold/40 w-full" onClick={recommend} disabled={pending}>
+        {pending ? <Loader2 className="animate-spin" /> : <Sparkles className="text-gold" />} Let AI recommend settings
+      </Button>
+      {reason && <p className="text-muted-foreground bg-gold-soft/50 rounded-lg px-3 py-2 text-xs leading-relaxed">{reason}</p>}
+    </div>
+  );
+}
+
 export function ShareSettings({
   value,
   onChange,
   errors = {},
   findings = [],
+  note,
 }: {
   value: ShareDraft;
   onChange: (next: ShareDraft) => void;
   errors?: Record<string, string>;
   findings?: Finding[];
+  /** When given, enables the AI "recommend settings" button. */
+  note?: { title: string; content: string };
 }) {
   const now = useNow(30_000);
+  const hydrated = useHydrated();
   const set = <K extends keyof ShareDraft>(key: K, v: ShareDraft[K]) => onChange({ ...value, [key]: v });
   const expiresAt = resolveExpiry(value);
   const oneTime = value.shareType === "one_time";
@@ -125,6 +166,7 @@ export function ShareSettings({
 
   return (
     <div className="space-y-6">
+      {note && <SmartShareButton note={note} value={value} onChange={onChange} />}
       {findings.length > 0 && (
         <div
           className={cn(
@@ -249,7 +291,7 @@ export function ShareSettings({
         />
       </FormField>
 
-      <p className="text-muted-foreground border-border border-t pt-4 text-xs leading-relaxed">{summary}</p>
+      <p className="text-muted-foreground border-border min-h-12 border-t pt-4 text-xs leading-relaxed">{hydrated && summary}</p>
     </div>
   );
 }

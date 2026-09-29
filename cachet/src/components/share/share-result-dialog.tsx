@@ -1,8 +1,8 @@
 "use client";
 
-import { AlertTriangle, ExternalLink, KeyRound, Link2, QrCode } from "lucide-react";
-import { motion } from "motion/react";
+import { AlertTriangle, Download, ExternalLink, KeyRound, Link2, Mail, MessageCircle, QrCode, Share2 } from "lucide-react";
 import QRCode from "qrcode";
+import { toast } from "@/lib/toast";
 import { useEffect, useState } from "react";
 import { SealMark } from "@/components/brand/logo";
 import { CopyButton } from "@/components/copy-button";
@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { friendlyDate } from "@/lib/format";
 
 export type ShareResult = {
-  shareUrl?: string;
+  shareUrl?: string | null;
   accessKey: string | null;
   link: { shareType: "one_time" | "time_based"; accessType: "public" | "password"; expiresAt: string };
   /** true when only a new key was issued for an existing link */
@@ -53,9 +53,9 @@ export function ShareResultDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-lg" onInteractOutside={(e) => e.preventDefault()}>
         <DialogHeader className="min-w-0 items-center text-center">
-          <motion.div initial={{ scale: 0.4, rotate: -30, opacity: 0 }} animate={{ scale: 1, rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 220, damping: 14 }}>
+          <div className="animate-stamp">
             <SealMark className="size-16 drop-shadow-[0_12px_24px_oklch(0.55_0.12_72/45%)]" />
-          </motion.div>
+          </div>
           <DialogTitle className="font-display text-3xl font-normal tracking-tight">
             {keyOnly ? "New key issued" : "Sealed & ready to share"}
           </DialogTitle>
@@ -108,10 +108,46 @@ export function ShareResultDialog({
           </div>
 
           {shareUrl && qr && showQr && (
-            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="flex justify-center">
+            <div className="animate-rise flex flex-col items-center gap-2">
               {/* eslint-disable-next-line @next/next/no-img-element -- data: URL generated locally */}
               <img src={qr} alt="QR code for the share link" className="border-border size-48 rounded-xl border" />
-            </motion.div>
+              <Button asChild variant="ghost" size="xs">
+                <a href={qr} download="cachet-share-qr.png">
+                  <Download /> Download QR
+                </a>
+              </Button>
+            </div>
+          )}
+
+          {shareUrl && (
+            <div className="grid grid-cols-3 gap-2">
+              {/* The key is deliberately left out of these messages — send it separately. */}
+              <Button asChild variant="outline" size="sm">
+                <a href={`mailto:?subject=${encodeURIComponent("A private note for you")}&body=${encodeURIComponent(`Here’s a private note for you: ${shareUrl}`)}`}>
+                  <Mail /> Email
+                </a>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <a href={`https://wa.me/?text=${encodeURIComponent(`Here’s a private note for you: ${shareUrl}`)}`} target="_blank" rel="noopener noreferrer">
+                  <MessageCircle /> WhatsApp
+                </a>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (navigator.share) {
+                    await navigator.share({ title: "A private note", url: shareUrl }).catch(() => undefined);
+                  } else {
+                    await navigator.clipboard.writeText(shareUrl);
+                    toast.success("Link copied");
+                  }
+                }}
+              >
+                <Share2 /> More
+              </Button>
+            </div>
           )}
         </div>
 

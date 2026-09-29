@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import type { AiAction } from "@/lib/validation";
+import type { AiAction } from "@/lib/constants";
 
 type State = { status: "idle" | "streaming" | "done" | "error"; text: string; action: AiAction | null; error?: string };
 
