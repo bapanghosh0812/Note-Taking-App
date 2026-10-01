@@ -351,7 +351,7 @@ Only 5 requests can win a slot per lock window; everything else is locked out **
 | Open redirect after login | `?next=` accepts same-site paths only |
 | Oversized payloads | 128 KB body limit, zod length limits, DB CHECK |
 | Error leakage | Unknown errors are logged server-side; clients get a generic message |
-| AI cost abuse / prompt injection | Auth required, 30 AI calls / hour / user, 20 k char input cap; note text is wrapped and treated as data; output only shown to its owner |
+| AI cost abuse / prompt injection | Auth required, 60 AI calls / hour / user, 20 k char input cap; note text is wrapped and treated as data; output only shown to its owner |
 
 ---
 
